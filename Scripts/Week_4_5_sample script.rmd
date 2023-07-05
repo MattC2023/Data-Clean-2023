@@ -1,0 +1,242 @@
+---
+title: "Microarray Data Cleaning Sample Script"
+author: "Matthew Chrostek"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warnings = FALSE)
+```
+
+### Libraries, functions, and lists for code chunks
+```{r}
+library(tidyverse)
+library(GEOquery)
+library(biomaRt)
+library(Biobase)
+library(BiocManager)
+library(annotate)
+library(knitr)
+library(purrr)
+
+#extract gene expression matrix
+Sys.setenv(VROOM_CONNECTION_SIZE = 10000000)
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+
+#load list of studies from folder
+list_study <- suppressMessages(read_table("/Users/matthewchrostek/Documents/Zhao Lab/Project_1_2023/Week4/list_microarray_studies.txt"))
+
+#data frame for clinical info
+cancer_df <- data.frame(
+  Abbreviation = c("ACC", "BLCA", "BRCA", "CESC", "CHOL", "COAD_READ", "DLBC", "ESCA", "GBM", "HNSC", "KICH", "KIRC", "KIRP", "LAML", "LGG", "LIHC", "LUAD", "LUSC", "MESO", "OV", "PAAD", "PCPG", "PRAD", "SARC", "SKCM", "STAD", "TGCT", "THCA", "THYM", "UCEC", "UCS", "UVM", "CNTL"),
+  CancerName = c("Adrenocortical Carcinoma", "Bladder Urothelial Carcinoma", "Breast Invasive Carcinoma", "Cervical Squamous Cell Carcinoma and Endocervical Adenocarcinoma", "Cholangiocarcinoma", "Colorectal Adenocarcinoma", "Lymphoid Neoplasm Diffuse Large B-Cell Lymphoma", "Esophageal Carcinoma", "Glioblastoma Multiforme", "Head and Neck Squamous Cell Carcinoma", "Kidney Chromophobe", "Kidney Renal Clear Cell Carcinoma", "Kidney Renal Papillary Cell Carcinoma", "Acute Myeloid Leukemia", "Brain Lower Grade Glioma", "Liver Hepatocellular Carcinoma", "Lung Adenocarcinoma", "Lung Squamous Cell Carcinoma", "Mesothelioma", "Ovarian Serous Cystadenocarcinoma", "Pancreatic Adenocarcinoma", "Pheochromocytoma and Paraganglioma", "Prostate Adenocarcinoma", "Sarcoma", "Skin Cutaneous Melanoma", "Stomach Adenocarcinoma", "Testicular Germ Cell Tumors", "Thyroid Carcinoma", "Thymoma", "Uterine Corpus Endometrial Carcinoma", "Uterine Carcinosarcoma", "Uveal Melanoma", "Controls")
+)
+###############################################################################
+
+# in this example, since there is a column called "Entrez_Gene_ID", so we will use that column for the conversion with the following entrez function
+entrez_fun <- function(x){
+  entrez_check <- grep("entrez", names(x), ignore.case = TRUE)
+  if(length(entrez_check) > 0) {
+    entrez_col <- x[[grep("entrez", names(x), ignore.case = TRUE)]]
+    x$Entrez_ID <- entrez_col
+    x %>%
+      dplyr::select(ID, Entrez_ID) %>%
+      filter(ID %in% gene_expression$ID) %>%
+      filter(!is.na(Entrez_ID)) %>%
+      filter(Entrez_ID != "")}
+  else{
+    x$RefSeq_ID <- x[[grep("refseq", names(x), ignore.case = TRUE)]]
+    x$RefSeq_ID <- sapply(strsplit(x$RefSeq_ID, "\\."), "[", 1)
+    x %>%
+      filter(!is.na(RefSeq_ID)) %>%
+      filter(RefSeq_ID != "")}
+}
+#platform_ann_df_filtered <- entrez_fun(platform_ann_df)
+
+# mapping based on entrez or refeq
+mapping_fun <- function(x){
+  entrez_check <- grep("entrez", names(x), ignore.case = TRUE)
+  if(length(entrez_check) > 0) {
+   map <- getBM(
+    attributes = c("entrezgene_id", "ensembl_gene_id", "hgnc_symbol", "gene_biotype"),
+    filters = "entrezgene_id",
+    values=unique(platform_ann_df_filtered$Entrez_ID),
+    mart=ensembl)}
+  else{
+    map <- getBM(
+    attributes = c("refseq_mrna", "ensembl_gene_id", "hgnc_symbol", "gene_biotype"),
+    filters = "refseq_mrna",
+    values=unique(platform_ann_df_filtered$RefSeq_ID),
+    mart=ensembl
+  )}
+}
+
+#function to read abbreviation and return appropriate cancer type
+match_and_return <- function(clin_filtered, cancer_df, col_name_df1, col_name_df2) {
+  result <- vector("character", length = nrow(clin_filtered))  # Create a vector to store the results
+  for (i in seq_along(clin_filtered[[col_name_df1]])) {
+    match_index <- which(cancer_df$Abbreviation == clin_filtered[[col_name_df1]][i])  # Find the matching index in cancer_df
+    if (length(match_index) > 0) {
+      result[i] <- cancer_df$CancerName[match_index]  # Retrieve the corresponding value from cancer_df
+    } else {
+      result[i] <- NA  # Set result as NA if no match is found
+    }
+  }
+  return(result)
+}
+#result <- match_and_return(clin_filtered, cancer_df, "abbreviation", "Abbreviation")
+
+
+# only keep protein_coding genes with valid hgnc_symbols (different in entrez or refseq id)
+probe_function <- function(x){
+  entrez_check <- grep("entrez", names(x), ignore.case = TRUE)
+  if(length(entrez_check) > 0) {
+    map_probe <- x %>% 
+    filter(!is.na(hgnc_symbol)) %>% 
+    filter(hgnc_symbol != "") %>% 
+    filter(gene_biotype=="protein_coding") %>% #filter down to protein_coding gene only
+    mutate(entrezgene_id=as.character(entrezgene_id)) %>% 
+    left_join(platform_ann_df_filtered, by=c("entrezgene_id"="Entrez_ID"))
+    map_probe}
+  else{
+    map_probe <- x %>% 
+    filter(!is.na(hgnc_symbol)) %>% 
+    filter(hgnc_symbol != "") %>% 
+    filter(gene_biotype=="protein_coding") %>% #filter down to protein_coding gene only
+    mutate(refseq_mrna=as.character(refseq_mrna)) %>% 
+    left_join(platform_ann_df_filtered, by=c("refseq_mrna"="RefSeq_ID"))
+    map_probe}
+}
+#mapping_probe <- probe_function(mapping)
+
+# join expression matrix with annotation table (based on entrez or refseq_id)
+ge_function <- function(x){
+  entrez_check <- grep("entrez", names(x), ignore.case = TRUE)
+  if(length(entrez_check) > 0) {
+  gene_expression_map_probe <- gene_expression %>% 
+    left_join(x, by="ID") %>% 
+    dplyr::select(-entrezgene_id) %>% 
+    dplyr::select(ID, ensembl_gene_id, hgnc_symbol, gene_biotype, everything()) %>% 
+    filter(!is.na(hgnc_symbol))
+  gene_expression_map_probe}
+  else{
+  gene_expression_map_probe <- gene_expression %>% 
+    left_join(x, by="ID") %>% 
+    dplyr::select(-refseq_mrna) %>% 
+    dplyr::select(ID, ensembl_gene_id, hgnc_symbol, gene_biotype, everything()) %>% 
+    filter(!is.na(hgnc_symbol))
+  gene_expression_map_probe}
+}
+#gene_expression_mapping_probe <- ge_function(mapping_probe)
+
+#function to replace blank with NA
+replace_blank <- function(x) {
+  if (x == "") {
+    return("NA")
+  } else {
+    return(x)
+  }
+}
+
+
+```
+
+
+### Organizing and Filtering Microarray Files: GSE98617
+```{r, warning=FALSE}
+#select study
+i <- 93
+GSE_code <- list_study[i,]$Dataset_id
+Platform_code <- list_study[i,]$Platform_id
+
+#extract GEO object with the given GSE_code and Platform_code
+gset <- suppressMessages(GEOquery::getGEO(GSE_code,  GSEMatrix =TRUE, getGPL=FALSE))
+if (length(gset) > 1) idx <- grep(Platform_code, attr(gset, "names")) else idx <- 1
+gset <- gset[[idx]]
+
+gene_expression <- as.data.frame(Biobase::exprs(gset)) %>% 
+  rownames_to_column("ID") 
+
+# retrieve platform annotation information
+platform_ann <- annotate::readGEOAnn(GEOAccNum = Platform_code)
+platform_ann_df <- as.data.frame(platform_ann, stringsAsFactors=FALSE)
+
+#modified entrez_fun to affount for samples with no entrez and varied refseq ID's
+platform_ann_df_filtered <- entrez_fun(platform_ann_df)
+
+# mapping based on entrez or refeq
+mapping <- mapping_fun(platform_ann_df_filtered)
+
+# only keep protein_coding genes with valid hgnc_symbols (different in entrez or refseq id)
+mapping_probe <- probe_function(mapping)
+
+# join expression matrix with annotation table (based on entrez or refseq_id)
+gene_expression_mapping_probe <- ge_function(mapping_probe)
+
+# For any probe IDs that are mapped to the same genes, select highest value
+exp_protein <- gene_expression_mapping_probe %>% 
+  mutate(mean_exp=rowMeans(dplyr::select(., starts_with("GSM")), na.rm = TRUE)) %>% 
+  group_by(hgnc_symbol) %>% 
+  slice_max(mean_exp, n=1, with_ties = F) 
+
+#Clinical data extraction
+clin <- pData(gset) %>% 
+  as.data.frame()
+
+#removed clinical samples that don't have any exp data
+samples_to_keep <- colnames(exp_protein)
+clin_filtered <- clin[clin$geo_accession %in% samples_to_keep, ]
+
+###
+#if "normal tissue" was from cancer patients, these are filtered out
+### removed non-tumor tissue because it was from cancer patients
+False_Normal_Subset <- clin_filtered[grepl("non",
+                    clin_filtered$source_name_ch1, ignore.case = TRUE), ]
+
+clin_filtered <- anti_join(clin, False_Normal_Subset)
+
+#keep only exp samples for which there are clinical data and are tumor samples
+filter <- c(clin_filtered$geo_accession, "ID", "ensembl_gene_id", "hgnc_symbol", "gene_biotype")
+exp_protein_filtered <- exp_protein[, (names(exp_protein) %in% filter)]
+
+#remove mean_exp column
+if ("mean_exp" %in% names(exp_protein_filtered)) {
+  exp_protein_filtered <- exp_protein_filtered[, -which(names(exp_protein_filtered) == "mean_exp")]
+}
+#################################################
+### making the 11 columns to keep ###
+clin_filtered$sample <- clin_filtered$geo_accession
+clin_filtered$study <- GSE_code
+clin_filtered$abbreviation <- "LIHC"
+
+#function to read abbreviation and return appropriate cancer type
+result <- match_and_return(clin_filtered, cancer_df, "abbreviation", "Abbreviation")
+clin_filtered$primary_disease <- result
+
+clin_filtered$sample_type <- ifelse(grepl("metastasis", clin_filtered$source_name_ch1, ignore.case = TRUE), 
+                                    "Metastatic Tumor",
+                             ifelse(grepl("HCC",  clin_filtered$source_name_ch1, ignore.case = TRUE), 
+                                    "Primary Tumor",
+                             ifelse(grepl("healthy",  clin_filtered$source_name_ch1, ignore.case = TRUE) |
+                                !grepl("metastasis|tumor|cancer",  clin_filtered$source_name_ch1, ignore.case = TRUE), 
+                                    "Normal Tissue",
+                                     "Other")))
+
+clin_filtered$primary_site <- "Liver"
+clin_filtered$metastasis_site <- "NA"
+clin_filtered$primary_site_original <- "NA"
+clin_filtered$primary_disease_original <- "NA"
+clin_filtered$abbreviation_original <- "NA"
+clin_filtered$sex_mf <- "NA"
+  
+clin_complete <- clin_filtered[, (ncol(clin_filtered)-10):ncol(clin_filtered)]
+
+#save outputs
+file_exp <- paste0(GSE_code, "_exp.rds")
+file_clin <- paste0(GSE_code, "_clin.rds")
+write_rds(exp_protein_filtered, file_exp)
+write_rds(clin_complete, file_clin)
+```

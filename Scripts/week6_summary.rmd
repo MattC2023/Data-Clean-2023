@@ -1,0 +1,336 @@
+---
+title: "Week 6: 06/26/2023 - 06/30/2023"
+author: "Matthew Chrostek"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(message = FALSE, warnings = FALSE)
+```
+
+
+
+## Microarray Expression Matrix Quality Summary
+```{r, echo=FALSE}
+library(tidyverse)
+library(knitr)
+library(ggsci)
+library(ggtext)
+library(plotrix)
+library(patchwork)
+library(reshape2)
+
+list_exp <- list.files(path="/Users/matthewchrostek/Documents/Zhao Lab/Project_1_2023/Week4/Data-Clean-2023/Microarray_clean", pattern = "_exp.rds", full.names = T, recursive = TRUE)
+
+# Initialize an empty data frame to store the results
+summary_table <- data.frame(
+  Dataset_id = character(),
+  num_genes = numeric(),
+  num_samples = numeric(),
+  min_exp = numeric(),
+  max_exp = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# Loop through each file and extract the required information
+for (file in list_exp) {
+  # Read the data from each file
+  data <- readRDS(file)
+  
+  # Extract the Dataset_id 
+  dataset_id <- tools::file_path_sans_ext(basename(file)) %>%
+  str_remove("_exp$")
+  # Extract the number of protein-coding genes
+  num_genes <- length(data$hgnc_symbol)
+  # Extract the number of samples
+  num_samples <- ncol(data) - 4
+  # Calculate the minimum and maximum expression values
+  min_exp <- min(unlist(data[, -(1:4)]), na.rm = TRUE)
+  max_exp <- max(unlist(data[, -(1:4)]), na.rm = TRUE)
+  
+  # Create a data frame with the extracted information
+  summary_df <- data.frame(
+    Dataset_id = dataset_id,
+    num_genes = num_genes,
+    num_samples = num_samples, 
+    min_exp = min_exp,
+    max_exp = max_exp,
+    stringsAsFactors = FALSE
+  )
+  
+  # Append the data frame to the summary table
+summary_table <- rbind(summary_table, summary_df)
+}
+
+# Print the summary table
+summary_table %>% 
+  arrange(desc(num_genes))
+
+```
+##### 96 microarray studies
+##### Studies with fewer than 15,000 genes: GSE124647, GSE125989, GSE14018, GSE14020_GPL96, GSE14359, GSE1722, GSE19279, GSE19280, GSE1987, GSE2280, GSE124647, GSE125989, GSE14018, GSE14020_GPL96, GSE14359, GSE1722, GSE19279, GSE19280, GSE1987, GSE2280, GSE6605, GSE6605_GPL8300, GSE6605_GPL92, GSE6605_GPL93, GSE6752, GSE68468, GSE73383, GSE9349, GSE9893			
+
+<br>
+<br>
+
+## Microarray Clinical Data Summary
+```{r, warning=FALSE, echo=FALSE}
+clin_list1 <- list.files(path="/Users/matthewchrostek/Documents/Zhao Lab/Project_1_2023/Week4/Data-Clean-2023/Microarray_clean", pattern = "_clin.rds", full.names = T, recursive = TRUE)
+
+#clin1 is microarray data
+clin1 <- map_dfr(clin_list1, readRDS)
+
+#clin1[clin1$primary_disease == "Sarcoma" & clin1$primary_site == "Kidney", ]
+
+clin_summary1 <- clin1 %>% 
+  count(abbreviation, primary_disease, primary_site, sample_type) %>% 
+  pivot_wider(names_from = sample_type, values_from = n) #%>% kable("simple")
+
+clin_summary1 %>%
+  arrange(desc(`Metastatic Tumor`))
+```
+##### Collectively Breast Invasive Carcinoma's had the most metastatic tumor samples while Colorectum Adenocarcinoma's had the most primary tumor samples and most tumor samples overall. Skin Cutaneous Melenoma had the greastest ratio of metastatic to primary tumor samples. Primary cancers which did not have metastatic tumor samples include: Lung Squamous Cell Carcinoma, Stomach Adenocarcinoma, Testicular Germ Cell Tumors, and 	Uveal Melanoma. Esophageal Carcinoma was the only primary cancer which had metastatic tumor samples but no primary tumor samples (excluding metastatic tumor samples of Cancer of Unknown Primary)
+
+<br>
+<br>
+
+```{r, echo=FALSE}
+#Microarray and RNAseq Combined Summry
+###
+#mircoarray clinical data (cs1)
+###
+#removed controls (only want ot keep tumor samples)
+clin_summary_filtered1 <- clin_summary1[!grepl("CNTL", clin_summary1$abbreviation),]
+
+#replace NA with 0 for number of different sample types
+clin_summary_filtered1[is.na(clin_summary_filtered1)] <- 0
+
+#removed primary site column since it wasn't needed for 1st graph
+cs1 <- clin_summary_filtered1
+cs1$primary_site <- NULL
+
+#combined SARC rows (one sample listed a SARCOMA in from kidney tissue)
+cs1 <- aggregate(cs1[,3:5], by = cs1[1:2], FUN = sum)
+
+###
+#RNAseq clinical data (cs2)
+###
+clin_list2 <- list.files(path="/Users/matthewchrostek/Documents/Zhao Lab/Project_1_2023/Weeks_1_2_3", pattern = "_clin.rds", full.names = T, recursive = TRUE)
+
+#clin2 is RNAseq data
+clin2 <- map_dfr(clin_list2, readRDS)
+
+#clin2[clin2$abbreviation == "BRCA" & clin2$primary_site == "NA", ]
+
+clin_summary2 <- clin2 %>% 
+  count(abbreviation, primary_disease, primary_site, sample_type) %>% 
+  pivot_wider(names_from = sample_type, values_from = n) #%>% kable("simple")
+
+#replace NA with 0 for number of different sample types
+clin_summary2[is.na(clin_summary2)] <- 0
+
+# Calculate the position of the bars
+cs2 <- clin_summary2
+
+#removed primary site column since it wasn't needed for 1st graph
+cs2$primary_site <- NULL
+
+#add Data type columns and normal tissue column(cs2)
+cs1$Data <- "microarray"
+cs2$`Normal Tissue` <- 0
+cs2$Data <- "RNAseq"
+
+#combine RNAseq and microarray data
+cs_combined <- rbind(cs1, cs2)
+
+#making m_total to act as label position and label1 and label 2 as labels
+cs_combined <- cs_combined %>% 
+  group_by(abbreviation) %>%
+  mutate(m_total = sum(`Metastatic Tumor`),
+         p_total = sum(`Primary Tumor`))
+
+cs_combined <- cs_combined %>%
+  group_by(abbreviation) %>%
+  mutate(m_RNAseq_label = ifelse(any(grepl("RNAseq", Data)), `Metastatic Tumor`[grepl("RNAseq", Data)], NA),
+         m_microarray_label = ifelse(any(grepl("microarray", Data)), `Metastatic Tumor`[grepl("microarray", Data)], NA)) %>%
+  mutate(p_RNAseq_label = ifelse(any(grepl("RNAseq", Data)), `Primary Tumor`[grepl("RNAseq", Data)], NA),
+         p_microarray_label = ifelse(any(grepl("microarray", Data)), `Primary Tumor`[grepl("microarray", Data)], NA)) %>%
+  ungroup()
+
+cs_combined[is.na(cs_combined)] <- 0
+
+```
+
+```{r, echo=FALSE}
+# Metastatic tumor graph showing number of different TCGA metastatic tumors in microarray and RNAseq datasets
+mgraph <- ggplot(cs_combined, aes(y = abbreviation, fill = Data)) +
+  geom_bar(aes(x = `Metastatic Tumor`), stat = "identity", width = 1, color = "black") +
+  scale_fill_manual(values = c("#ff1b6b", "#45caff")) +
+  labs(x = "Metastatic Tumors",
+       y = NULL) +
+   theme(legend.position = c(0.75, 0.5),
+        axis.ticks.y = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.y = ggtext::element_markdown(size = 10, color = "black", vjust = .5, hjust = .5),
+        panel.grid = element_blank(),
+        panel.background = element_blank()) +
+  geom_vline(xintercept = 0, color = "black", linewidth = .5) +
+  geom_segment(aes(x = 0, xend = 2500, y = 0, yend = 0), linetype = "solid", color = "black", linewidth = .5)
+
+#remove duplicate abbreviations then used label columns which effectively take data from RNAseq and microarray data sets
+cs_combined2 <- cs_combined[!duplicated(cs_combined$abbreviation),]
+
+#make and add bar labels
+for(i in 1:nrow(cs_combined2)){
+  mgraph <- mgraph +
+    annotate("text", x = -10, y = cs_combined2$abbreviation[i], label = cs_combined2$m_RNAseq_label[i], color = "#45caff", hjust = 1) +
+    annotate("text", x = cs_combined2$m_total[i], y = cs_combined2$abbreviation[i], label = cs_combined2$m_microarray_label[i], color = "#ff1b6b", hjust = -.2)
+}
+```
+
+```{r, echo=FALSE}
+# Primary tumor graph showing number of different primary tumors in microarray and RNAseq datasets
+pgraph <- ggplot(cs_combined, aes(y = abbreviation, fill = Data)) +
+  geom_bar(aes(x = `Primary Tumor`), stat = "identity", width = 1, color = "black") +
+  scale_fill_manual(values = c("#ff1b6b", "#45caff")) +
+  labs(x = "Primary Tumors",
+       y = NULL) +
+  theme(legend.position = "none",
+        axis.ticks.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.title.y = element_blank(),
+        panel.grid = element_blank(),
+        panel.background = element_blank(),
+      ) +
+  scale_x_reverse() + 
+  scale_y_discrete(position = "right") +
+  geom_vline(xintercept = 0, color = "black", linewidth = .5) +
+  geom_segment(aes(x = 0, xend = 2500, y = 0, yend = 0), linetype = "solid", color = "black", linewidth = .5)
+
+#make and add bar labels for p_graph
+for(i in 1:nrow(cs_combined2)){
+  pgraph <- pgraph +
+    annotate("text", x = cs_combined2$p_total[i], y = cs_combined2$abbreviation[i],
+             label = cs_combined2$p_microarray_label[i], color = "#ff1b6b", hjust = 1.1) +
+    annotate("text", x = -10, y = cs_combined2$abbreviation[i],
+             label = cs_combined2$p_RNAseq_label[i], color = "#45caff", hjust = 0)
+}
+
+############################
+```
+
+
+
+## Metastatic Tumors and Primary Disease in RNAseq and Datasets 
+```{r, echo=FALSE}
+mgraph <- mgraph + 
+  annotate("text", x = -150, y = min(cs_combined2$abbreviation), label = " ", hjust = 0)
+
+pgraph <- pgraph + 
+  annotate("text", x = -100, y = min(cs_combined2$abbreviation), label = " ", hjust = 0) +
+  annotate("text", x = 2700, y = min(cs_combined2$abbreviation), label = " ", hjust = 0)
+
+
+combined_graph <- pgraph + mgraph
+
+combined_graph <- combined_graph +
+  labs(title = "TCGA Abbreviation") +
+  theme(
+    plot.title = element_text(hjust = -.85, size = 11, face = "bold")
+  )
+combined_graph
+```
+
+```{r, echo=FALSE}
+# Distribution of Metastasis Sites by Tumor Type
+
+#add data type columns then combine data frames
+met_dis1 <- clin1
+met_dis1$Data <- "microarray"
+met_dis2 <- clin2
+met_dis2$Data <- "RNAseq"
+metastasis_distribution <- rbind(met_dis2, met_dis1)
+
+#filter out samples with no data on metastasis sites
+metastasis_distribution <- metastasis_distribution %>%
+  filter(metastasis_site != "NA")
+
+#identify main location (organ) of metastasis: Adrenal Gland and Kidney, Brain, Bone, Lymph Nodes, Lung, Liver, Colorectum, Ovary, Breast, and Other (remaining)
+metastasis_location <- vector("character", length = length(metastasis_distribution$metastasis_site))
+for (i in seq_along(metastasis_distribution$metastasis_site)) {
+  if (metastasis_distribution$metastasis_site[i] %in% c("Brain", "brain", "brain_and_other")) { #listead brain and other as brain
+    metastasis_location[i] <- "Brain"
+  } else if (grepl("Bone", metastasis_distribution$metastasis_site[i], ignore.case = TRUE)) {
+    metastasis_location[i] <- "Bone"
+  } else if (metastasis_distribution$metastasis_site[i] %in% c("Lymohnode", "Lymphnode", "LN", "ln")) {
+    metastasis_location[i] <- "Lymph Node"
+  } else if (grepl("lymph", metastasis_distribution$metastasis_site[i], ignore.case = TRUE)) {
+    metastasis_location[i] <- "Lymph Node"
+  } else if (metastasis_distribution$metastasis_site[i] %in% c("Non-Lung tissue", "Non-lung tissue")) {
+    metastasis_location[i] <- "Other"
+  } else if (grepl("lung", metastasis_distribution$metastasis_site[i], ignore.case = TRUE)) {
+    metastasis_location[i] <- "Lung"
+  } else if (grepl("pulmonary", metastasis_distribution$metastasis_site[i], ignore.case = TRUE)) {
+    metastasis_location[i] <- "Lung"
+  } else if (grepl("kidney", metastasis_distribution$metastasis_site[i], ignore.case = TRUE)) {
+    metastasis_location[i] <- "Kidney"
+  } else if (grepl("renal", metastasis_distribution$metastasis_site[i], ignore.case = TRUE)) {
+    metastasis_location[i] <- "Kidney"
+  } else if (grepl("liver", metastasis_distribution$metastasis_site[i], ignore.case = TRUE)) {
+    metastasis_location[i] <- "Liver"
+  } else {
+    metastasis_location[i] <- "Other"
+  }
+}
+
+metastasis_distribution$metastases_location <- metastasis_location
+
+met_distributiion_count <- metastasis_distribution %>%
+  group_by(primary_disease, metastases_location) %>%
+  summarise(count = n(), .groups = 'drop')
+```
+<br>
+<br>
+
+## Heatmap of Primary Diseases and Metastases Sites
+```{r, echo=FALSE}
+#Adjusting data structure for heatmap
+df_wide <- reshape2::dcast(met_distributiion_count, primary_disease ~ metastases_location, value.var = "count")
+
+# Melt the data to long format for ggplot
+df_long <- reshape2::melt(df_wide, id.vars = "primary_disease")
+
+# Create the heatmap
+ggplot(df_long, aes(x = primary_disease, y = variable, fill = value)) +
+  geom_tile(color = "black") +
+  scale_fill_gradient(low = "#caf0f8", high = "#023e8a", na.value = "white") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "Primary Disease", y = "Metastases Location", fill = "Count") +
+  ggtitle("Primary Diseases and Metastases Locations")
+
+### Switch alphabetical order; brca at top
+### also reverse order  on name sin heatmap
+### use TCGA abbreviation for heatmap with 90 degree angle
+### convert heatmap to proportions
+### add figure 1 ...
+```
+
+<br>
+<br>
+
+## Summary
+
+##### Reviewing the metastases data, breast and prostate cancers were the only primary cancers to metastasize to the bone (and are normally the most frequent cancer types to do so). Metastases in the brain most often come from lung, breast, and skin cancers and these were all represented in our data, in addition to some GI and kidney cancers.  From our metastatic tumors in the kidney, we observed primary cancer sources including renal clear cell carcinoma, as well as liver, lung, and prostate cancers all at similar numbers (lung, breast, skin, and GI primary cancers are the most common to spread to the kidney, but in general metastases to the kidney is rare). Liver metastases frequently come from breast, lung, and GI cancers, and in our dataset there were breast and GI cancer with liver metastases, however there were none from our primary lung cancers. The lung, when a site of metastatic invasion, will often be seeded with metastatic breast, skin, or thyroid cancers, however we saw only metastatic breast cancer in the lung (of these three). In the lung we also saw GI, head and neck, kidney, liver, and lung primary cancers metastasize to this site as well.
+##### Of the primary cancers, breast and prostate cancers spread to the largest number of different organs, in line with the high prevalence of these two cancer types (providing many opportunities for metastatic spread) and in particular for breast cancers which often develop near lymphatics and blood vessels enabling body-wide spread. The most common site of metastatic spread across cancer types were lymph nodes, most likely because cancers cells often have to travel near or through lymph nodes before spreading to the rest of the body. The most common metastasis site by individual primary cancers was colorectal adenocarcinoma spread to the liver (its most common site of metastasis). In general the data support the idea of organotropism where primary cancer have a tendency to spread to certain organ sites based on the biology of the cancer and organ site.
+
+##### References:
+##### https://www.cell.com/developmental-cell/fulltext/S1534-5807(19)30282-5
+##### https://www.nature.com/articles/s41698-018-0047-0
+##### https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7323720/
+
+
